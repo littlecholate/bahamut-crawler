@@ -1,0 +1,52 @@
+name: Daily Bahamut Crawler
+
+on:
+    schedule:
+        # 每天 UTC 20:00 (台灣時間 04:00) 觸發
+        - cron: '0 20 * * *'
+    # 允許手動點擊按鈕觸發 (方便測試)
+    workflow_dispatch:
+
+# 賦予 Actions 修改儲存庫的權限 (必要的，因為我們要 git push)
+permissions:
+    contents: write
+
+jobs:
+    scrape-and-push:
+        runs-on: ubuntu-latest
+
+        # 將環境變數直接設定在這裡
+        # 這樣 scraper.js 裡的 process.env 就能讀取到
+        env:
+            HOT_BOARDS: '80099,81566,74934'
+            HOT_LIMIT: '20'
+            COLD_BOARDS: '37505,33651,37697,29330,70502'
+            COLD_LIMIT: '10'
+            BASE_URL: 'https://www.gamer.com.tw/'
+            FORUM_BASE_URL: 'https://forum.gamer.com.tw/'
+            TZ: 'Asia/Taipei' # 設定系統時區
+
+        steps:
+            - name: Checkout code (檢出程式碼)
+              uses: actions/checkout@v4
+
+            - name: Setup Node.js (安裝 Node 環境)
+              uses: actions/setup-node@v4
+              with:
+                  node-version: '18'
+                  cache: 'npm'
+
+            - name: Install dependencies (安裝套件)
+              # 如果你有 package-lock.json，使用 npm ci 比較快且穩
+              # 如果沒有，改用 npm install
+              run: npm install
+
+            - name: Configure Git (設定 Git 使用者)
+              # 因為 scraper.js 裡面會執行 git commit，這裡必須先設定身分
+              run: |
+                  git config --global user.name "GitHub Action Bot"
+                  git config --global user.email "actions@github.com"
+
+            - name: Run Scraper (執行爬蟲)
+              # 執行你的腳本，腳本內含 git push 邏輯
+              run: node scraper.js

@@ -1,19 +1,20 @@
 /**
- * 巴哈姆特 (Gamer.com.tw) 綜合爬蟲 V9 (Env 配置版)
+ * 巴哈姆特 (Gamer.com.tw) 綜合爬蟲 V11 (Git 自動推送版)
  * 包含：首頁頭條、熱門/冷門看板最新文章
  * 特性：
  * 1. 使用 dotenv 讀取環境變數配置
  * 2. 輸出 Markdown 表格
- * 3. 過濾置頂、集中串、非近三日文章
+ * 3. 過濾：置頂、非近三日、以及標題含 ['集中', '新手', '梗圖'] 的文章
+ * 4. [NEW] 執行結束後自動 Commit 並 Push 到 GitHub
  */
 
 require('dotenv').config(); // 載入 .env 檔案
 const puppeteer = require('puppeteer');
 const fs = require('fs');
+const { exec } = require('child_process'); // 引入執行系統指令的模組
 
 // --- 設定區 (改為從 process.env 讀取) ---
 
-// 輔助函式：解析逗號分隔的字串為陣列
 const parseArray = (envVar) => {
     if (!envVar) return [];
     return envVar
@@ -22,20 +23,37 @@ const parseArray = (envVar) => {
         .filter(Boolean);
 };
 
-// 熱門看板設定
-const HOT_BOARDS = parseArray(process.env.HOT_BOARDS); // 預設為空陣列
-const HOT_LIMIT = parseInt(process.env.HOT_LIMIT) || 20; // 預設 20
+const HOT_BOARDS = parseArray(process.env.HOT_BOARDS);
+const HOT_LIMIT = parseInt(process.env.HOT_LIMIT) || 20;
 
-// 冷門看板設定
 const COLD_BOARDS = parseArray(process.env.COLD_BOARDS);
-const COLD_LIMIT = parseInt(process.env.COLD_LIMIT) || 10; // 預設 10
+const COLD_LIMIT = parseInt(process.env.COLD_LIMIT) || 10;
 
-// URL 設定
 const BASE_URL = process.env.BASE_URL || 'https://www.gamer.com.tw/';
 const FORUM_BASE_URL = process.env.FORUM_BASE_URL || 'https://forum.gamer.com.tw/';
 
+// --- Git 指令輔助函式 ---
+const runGitCommand = (command) => {
+    return new Promise((resolve, reject) => {
+        exec(command, (error, stdout, stderr) => {
+            if (error) {
+                // 如果是 "nothing to commit" 這種錯誤，通常可以忽略
+                if (stdout.includes('nothing to commit') || stderr.includes('nothing to commit')) {
+                    console.log('   ⚠️  沒有變更需要提交');
+                    resolve('No changes');
+                } else {
+                    console.warn(`   ⚠️  Git Warning: ${stderr}`);
+                    resolve(stderr); // 即使有警告也繼續執行，不中斷爬蟲流程
+                }
+            } else {
+                resolve(stdout.trim());
+            }
+        });
+    });
+};
+
 (async () => {
-    console.log('🚀 啟動爬蟲 (讀取 Env 配置)...');
+    console.log('🚀 啟動爬蟲 (Git 自動推送版)...');
     console.log(`📋 設定確認:`);
     console.log(`   - 熱門看板 ID: ${HOT_BOARDS.join(', ')} (Limit: ${HOT_LIMIT})`);
     console.log(`   - 冷門看板 ID: ${COLD_BOARDS.join(', ')} (Limit: ${COLD_LIMIT})`);
@@ -111,7 +129,6 @@ const FORUM_BASE_URL = process.env.FORUM_BASE_URL || 'https://forum.gamer.com.tw
                 return { name: `看板 ID ${boardId}`, posts: [] };
             }
 
-            // 1. 抓取看板名稱
             const boardName = await page.evaluate(() => {
                 const nameEl = document.querySelector('a[data-gtm="選單-看板名稱"]');
                 return nameEl ? nameEl.innerText.trim() : null;
@@ -119,12 +136,11 @@ const FORUM_BASE_URL = process.env.FORUM_BASE_URL || 'https://forum.gamer.com.tw
             const finalName = boardName || `看板 ${boardId}`;
             console.log(`   🏷️  看板名稱: ${finalName}`);
 
-            // 2. 抓取文章
             const allPosts = await page.evaluate(() => {
                 const rows = document.querySelectorAll('tr.b-list__row');
                 const results = [];
                 const validTimeKeywords = ['剛剛', '分前', '小時前', '昨天'];
-                const excludeKeywords = ['集中', '梗圖', '綜合'];
+                const excludeKeywords = ['集中', '新手', '梗圖'];
 
                 rows.forEach((row) => {
                     if (row.classList.contains('b-list__row--sticky')) return;
@@ -138,7 +154,6 @@ const FORUM_BASE_URL = process.env.FORUM_BASE_URL || 'https://forum.gamer.com.tw
                         const timeText = timeEl.innerText.trim();
 
                         if (excludeKeywords.some((keyword) => titleText.includes(keyword))) return;
-
                         const isRecent = validTimeKeywords.some((keyword) => timeText.includes(keyword));
                         if (!isRecent) return;
 
@@ -159,26 +174,20 @@ const FORUM_BASE_URL = process.env.FORUM_BASE_URL || 'https://forum.gamer.com.tw
             return { name: finalName, posts: limitedPosts };
         };
 
-        // --- 輔助函式：生成 Markdown 表格 ---
         const generateTable = (posts) => {
             if (posts.length === 0) return `*(無符合條件的文章)*\n`;
-
             let table = `| 文章標題 | 簡短說明 | 時間 |\n`;
             table += `| :--- | :--- | :--- |\n`;
-
             posts.forEach((post) => {
                 const fullUrl = FORUM_BASE_URL + post.url;
                 const safeBrief = post.brief.replace(/\n/g, ' ').replace(/\|/g, '｜');
                 const briefDisplay = safeBrief.length > 50 ? safeBrief.substring(0, 50) + '...' : safeBrief;
-
                 table += `| [${post.title}](${fullUrl}) | ${briefDisplay} | ${post.time} |\n`;
             });
             return table + '\n';
         };
 
         // --- 任務 B: 執行分眾爬取 ---
-
-        // 1. 熱門看板
         if (HOT_BOARDS.length > 0) {
             markdownContent += `## 🛡️ 熱門看板 (近三日精選)\n`;
             for (const boardId of HOT_BOARDS) {
@@ -188,7 +197,6 @@ const FORUM_BASE_URL = process.env.FORUM_BASE_URL || 'https://forum.gamer.com.tw
             }
         }
 
-        // 2. 冷門看板
         if (COLD_BOARDS.length > 0) {
             markdownContent += `## ❄️ 冷門看板 (近三日精選)\n`;
             for (const boardId of COLD_BOARDS) {
@@ -199,12 +207,33 @@ const FORUM_BASE_URL = process.env.FORUM_BASE_URL || 'https://forum.gamer.com.tw
         }
 
         // --- 寫入檔案 ---
-        fs.writeFileSync('gamer_news.md', markdownContent);
-        console.log(`\n✅ 檔案已輸出: gamer_news.md`);
-    } catch (error) {
-        console.error('❌ 發生錯誤:', error);
-    } finally {
+        fs.writeFileSync('README.md', markdownContent);
+        console.log(`\n✅ 檔案已輸出: README.md`);
+
+        // --- 關閉瀏覽器 ---
         await browser.close();
-        console.log('👋 任務結束');
+        console.log('\n👋 爬蟲任務結束');
+
+        // --- 任務 C: Git 自動推送 ---
+        console.log(`\n============== 🐙 正在執行 Git 推送 ==============`);
+        try {
+            console.log('1. 加入檔案 (git add)...');
+            await runGitCommand('git add README.md');
+
+            console.log('2. 提交變更 (git commit)...');
+            const dateStr = new Date().toISOString().split('T')[0];
+            await runGitCommand(`git commit -m "Daily News Update: ${dateStr}"`);
+
+            console.log('3. 推送至遠端 (git push)...');
+            await runGitCommand('git push');
+
+            console.log('🎉 成功！最新新聞已推送到 GitHub。');
+        } catch (gitError) {
+            console.error('❌ Git 推送過程中發生錯誤 (請檢查 Git 設定或網路):');
+            console.error(gitError);
+        }
+    } catch (error) {
+        console.error('❌ 發生嚴重錯誤:', error);
+        if (browser) await browser.close();
     }
 })();
