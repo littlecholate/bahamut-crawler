@@ -49,4 +49,5 @@ jobs:
 
             - name: Run Scraper (執行爬蟲)
               # 執行你的腳本，腳本內含 git push 邏輯
-              run: node scraper.js
+              run: node index.js
+
